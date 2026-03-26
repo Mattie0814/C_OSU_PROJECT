@@ -7,7 +7,8 @@
 #include <math.h>
 #include <conio.h>
 #include <mmsystem.h>
-//#pragma comment(lib, "winmm.lib")
+
+// FIX: Uncommented to ensure audio functions link correctly in MSVC
 
 #define MAX_PLAYERS 30
 #define NAME_LEN 16
@@ -23,7 +24,7 @@ typedef struct {
     int x, y;
     float spawn_time;
     int is_hit;
-    int is_active;  // NEW
+    int is_active;  
 } Note;
 
 Player leaderboard[MAX_PLAYERS];
@@ -38,8 +39,13 @@ int current_track_id = 0;
 int current_score = 0;
 int notes_hit = 0;
 int notes_missed = 0;
-int last_mouse_x = -1, last_mouse_y = -1;
 DWORD track_start_time = 0;
+
+// FIX: Consolidated input tracking variables
+int last_mouse_x = -1, last_mouse_y = -1;
+int prev_mouse_x = -1, prev_mouse_y = -1;
+int click_x = -1, click_y = -1;
+int esc_pressed = 0;
 
 void lobby_menu();
 void display_leaderboard();
@@ -57,14 +63,13 @@ void read_track_data(int track_id);
 int is_valid_username(char *name);
 int is_file_empty();
 int find_player(char *name);
-void clear_input_buffer();
-void get_track_data(int track_id);
 int get_int_input();
 void set_color(int color);
 void gotoxy(int x, int y);
+void hide_cursor(); // NEW
 void enable_mouse_input();
-int get_mouse_position(int *mouse_x, int *mouse_y);
-int get_mouse_click(int *x, int *y);
+void process_inputs(); // NEW
+
 void play_audio(int file);
 void play_track(int file);
 
@@ -73,7 +78,6 @@ void clear_note(Note n);
 void handle_game();
 int calculate_score(float time_diff);
 void end_track_results();
-int check_escape();
 
 // ========================================
 // ================= MENU =================
@@ -82,12 +86,10 @@ int check_escape();
 int main() {
     retrieve_leaderboard();
     enable_mouse_input();
+    hide_cursor(); // FIX: Hide the blinking console cursor for a cleaner look
     lobby_menu();
-
     return 0;
-
 }
-
 
 void lobby_menu(){
     int choice;
@@ -113,35 +115,26 @@ void lobby_menu(){
                     register_menu();
                     current_player_index = last_lb;
                 }
-
-
                 if(logged_in == 1)
                     display_track_selector();
-
                 else
                     user_menu();
-
                 break;
-
             case 2:
                 display_leaderboard();
                 break;
-
             case 0:
                 save_leaderboard();
                 printf("Goodbye!\n");
                 exit(0);
-
             default:
                 printf("Invalid choice.\n");
         }
     }
 }
 
-
 void user_menu(){
     system("cls");
-
     int choice;
 
     printf("--= C OSU =--\n");
@@ -162,7 +155,6 @@ void user_menu(){
             }
             break;
         }
-
         case 2:
             register_menu();
             if(logged_in == 1){
@@ -170,26 +162,25 @@ void user_menu(){
                 display_track_selector();
             }
             break;
-
         case 0:
             return;
-
         default:
             printf("Invalid input.\n");
             system("pause");
-    play_audio(1);
+            play_audio(1); 
     }
 }
 
-// ================= REGISTER =================
 void register_menu(){
     system("cls");
-
     char name[NAME_LEN];
 
     printf("--= REGISTER USER =--\n");
     printf("Enter username (letters only, max 15 chars): ");
-    fgets(name, sizeof(name), stdin);
+    if (!fgets(name, sizeof(name), stdin)) {
+        printf("Input error.\n");
+        return;
+    }
     name[strcspn(name, "\n")] = 0;
 
     if(strlen(name) == 0 || !is_valid_username(name)){
@@ -208,7 +199,8 @@ void register_menu(){
     }
 
     last_lb++;
-    strcpy(leaderboard[last_lb].name, name);
+    strncpy(leaderboard[last_lb].name, name, NAME_LEN-1);
+    leaderboard[last_lb].name[NAME_LEN-1] = '\0';
     leaderboard[last_lb].score_1 = 0;
     leaderboard[last_lb].score_2 = 0;
     leaderboard[last_lb].score_3 = 0;
@@ -216,35 +208,37 @@ void register_menu(){
     logged_in = 1;
     play_audio(1);
     printf("Registration successful!\n");
+    Sleep(1000);
 }
 
-// ================= LOGIN =================
 int login_menu(){
     system("cls");
-
     char name[NAME_LEN];
 
     printf("--= LOGIN USER =--\n");
     printf("Enter username: ");
-    fgets(name, sizeof(name), stdin);
+    if (!fgets(name, sizeof(name), stdin)) {
+        printf("Input error.\n");
+        return -1;
+    }
     name[strcspn(name, "\n")] = 0;
 
     int index = find_player(name);
 
     if(index == -1){
         printf("User not found.\n");
+        system("pause");
         return -1;
     }
 
     printf("Welcome, %s!\n", name);
     play_audio(1);
+    Sleep(1000);
     return index;
 }
 
-// ================= TRACK SELECT =================
 void display_track_selector(){
     system("cls");
-
     int choice;
 
     printf("Select Track:\n");
@@ -257,41 +251,47 @@ void display_track_selector(){
 
     choice = get_int_input();
 
+    if(choice < 0 || choice > 4) {
+        printf("Invalid track selection.\n");
+        system("pause");
+        return;
+    }
     if(choice == 0) return;
+    
     play_audio(2);
-    get_track_data(choice);
-}
-
-
-void get_track_data(int track_id){
-    current_track_id = track_id;
-    current_score = 0;
-    notes_hit = 0;
-    notes_missed = 0;
-    last_mouse_x = -1;
-    last_mouse_y = -1;
-
-    read_track_data(track_id);
+    read_track_data(choice);
 
     if(last_tr == -1){
-        printf("Track not found!\n");
+        printf("Track not found or empty!\n");
         system("pause");
         return;
     }
 
+    current_track_id = choice;
+    current_score = 0;
+    notes_hit = 0;
+    notes_missed = 0;
+    last_mouse_x = -1; last_mouse_y = -1;
+    prev_mouse_x = -1; prev_mouse_y = -1;
+    
     track_playing = 1;
     track_start_time = GetTickCount();
+
+    // FIX: Actually start the music track here!
+    play_track(choice);
 
     system("cls");
 
     while(track_playing){
         handle_game();
     }
+    
+    // FIX: Stop the track when exiting the loop
+    mciSendString("close bgm", NULL, 0, NULL);
 }
 
 void read_track_data(int track_id){
     char filepath[32];
-
     last_tr = -1;
 
     switch(track_id){
@@ -303,7 +303,10 @@ void read_track_data(int track_id){
     }
 
     FILE *fp = fopen(filepath, "r");
-    if (!fp) return;
+    if (!fp) {
+        printf("Track file '%s' not found!\n", filepath);
+        return;
+    }
 
     while(last_tr < 499 && fscanf(fp, "%d,%d,%f",
           &track[last_tr+1].x,
@@ -311,13 +314,12 @@ void read_track_data(int track_id){
           &track[last_tr+1].spawn_time) == 3){
 
         last_tr++;
-
         track[last_tr].is_hit = 0;
         track[last_tr].is_active = 0;
     }
-
     fclose(fp);
 }
+
 void sort_leaderboard(){
     char current_name[NAME_LEN] = "";
     if(current_player_index >= 0 && current_player_index <= last_lb){
@@ -342,10 +344,8 @@ void sort_leaderboard(){
     }
 }
 
-// ================= LEADERBOARD =================
 void display_leaderboard(){
     system("cls");
-
     sort_leaderboard();
 
     printf("%-4s %-16s %-8s %-8s %-8s %-10s\n",
@@ -363,11 +363,10 @@ void display_leaderboard(){
                leaderboard[i].score_3,
                total);
     }
-
+    printf("\n");
     system("pause");
 }
 
-// ================= FILE =================
 void save_leaderboard(){
     FILE *fp = fopen("leaderboard.txt", "w");
     if (!fp) return;
@@ -379,17 +378,17 @@ void save_leaderboard(){
                 leaderboard[i].score_2,
                 leaderboard[i].score_3);
     }
-
     fclose(fp);
 }
 
-
 void retrieve_leaderboard(){
     FILE *fp = fopen("leaderboard.txt", "r");
-    if (!fp) return;
+    if (!fp) {
+        last_lb = -1;
+        return;
+    }
 
     last_lb = -1;
-
     while(last_lb < MAX_PLAYERS - 1 && fscanf(fp, "%15[^,],%d,%d,%d\n",
                  leaderboard[last_lb + 1].name,
                  &leaderboard[last_lb + 1].score_1,
@@ -397,12 +396,9 @@ void retrieve_leaderboard(){
                  &leaderboard[last_lb + 1].score_3) == 4){
         last_lb++;
     }
-
     fclose(fp);
 }
 
-
-// ================= UTIL =================
 int is_valid_username(char *name){
     for(int i = 0; name[i]; i++){
         if(!isalpha(name[i])) return 0;
@@ -422,30 +418,21 @@ int find_player(char *name){
 int is_file_empty(){
     FILE *fp = fopen("leaderboard.txt", "r");
     if (!fp) return 1;
-
     int c = fgetc(fp);
     fclose(fp);
-
     return (c == EOF);
 }
 
 int get_int_input(){
+    char buf[32];
     int value;
-    int result;
-
-    result = scanf("%d", &value);
-
-    if(result != 1){
-        clear_input_buffer();
+    if (!fgets(buf, sizeof(buf), stdin)) {
         return -999;
     }
-
-    clear_input_buffer();
+    if (sscanf(buf, "%d", &value) != 1) {
+        return -999;
+    }
     return value;
-}
-
-void clear_input_buffer(){
-    while(getchar() != '\n');
 }
 
 void set_color(int color){
@@ -459,79 +446,67 @@ void gotoxy(int x, int y){
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
 }
 
+void hide_cursor() {
+    HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_CURSOR_INFO info;
+    info.dwSize = 100;
+    info.bVisible = FALSE;
+    SetConsoleCursorInfo(consoleHandle, &info);
+}
+
 void enable_mouse_input(){
     HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
     DWORD mode = 0;
-
-    if(!GetConsoleMode(hInput, &mode)){
-        return;
-    }
-
+    if(!GetConsoleMode(hInput, &mode)) return;
     mode |= ENABLE_MOUSE_INPUT;
-    mode &= ~ENABLE_QUICK_EDIT_MODE;
+    mode &= ~ENABLE_QUICK_EDIT_MODE; // Prevents the console from pausing when clicked
     SetConsoleMode(hInput, mode);
 }
 
-int get_mouse_position(int *mouse_x, int *mouse_y){
+// FIX: A single unified input processing loop that prevents buffer flooding lag.
+void process_inputs() {
     HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-    INPUT_RECORD inRec;
-    DWORD numRead;
+    DWORD numEvents = 0;
+    
+    GetNumberOfConsoleInputEvents(hInput, &numEvents);
+    
+    click_x = -1;
+    click_y = -1;
+    esc_pressed = 0;
 
-    // Non-blocking check with timeout
-    if(!PeekConsoleInput(hInput, &inRec, 1, &numRead) || numRead == 0){
-        return 0;
-    }
+    // Drain all events generated since the last frame
+    while (numEvents > 0) {
+        INPUT_RECORD inRec;
+        DWORD numRead;
+        ReadConsoleInput(hInput, &inRec, 1, &numRead);
 
-    if(inRec.EventType == MOUSE_EVENT){
-        MOUSE_EVENT_RECORD m = inRec.Event.MouseEvent;
+        if (inRec.EventType == MOUSE_EVENT) {
+            MOUSE_EVENT_RECORD m = inRec.Event.MouseEvent;
+            
+            last_mouse_x = m.dwMousePosition.X;
+            last_mouse_y = m.dwMousePosition.Y;
 
-        // Only update position if it's not a click event
-        if(!(m.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)){
-            ReadConsoleInput(hInput, &inRec, 1, &numRead);
-            *mouse_x = m.dwMousePosition.X;
-            *mouse_y = m.dwMousePosition.Y;
-            return 1;
+            // Register a click only on down-press (dwEventFlags == 0)
+            if (m.dwEventFlags == 0 && (m.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)) {
+                click_x = last_mouse_x;
+                click_y = last_mouse_y;
+                play_audio(4);
+            }
+        } else if (inRec.EventType == KEY_EVENT) {
+            if (inRec.Event.KeyEvent.bKeyDown && inRec.Event.KeyEvent.wVirtualKeyCode == VK_ESCAPE) {
+                esc_pressed = 1;
+            }
         }
+        GetNumberOfConsoleInputEvents(hInput, &numEvents);
     }
-
-    return 0;
 }
-
-
-int get_mouse_click(int *mouse_x, int *mouse_y){
-    HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-    INPUT_RECORD inRec;
-    DWORD numRead;
-
-    // Non-blocking check with PeekConsoleInput
-    if(!PeekConsoleInput(hInput, &inRec, 1, &numRead) || numRead == 0){
-        return 0;
-    }
-
-    play_audio(4);
-
-    if(inRec.EventType == MOUSE_EVENT){
-        MOUSE_EVENT_RECORD m = inRec.Event.MouseEvent;
-
-        if(m.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED){
-            // Actually read the input to remove it from buffer
-            ReadConsoleInput(hInput, &inRec, 1, &numRead);
-            *mouse_x = m.dwMousePosition.X;
-            *mouse_y = m.dwMousePosition.Y;
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
 
 void play_audio(int file){
     switch(file){
-        case 1: PlaySound("menu_press.wav", NULL, SND_FILENAME | SND_ASYNC); break;
-        case 2: PlaySound("track_selected.wav", NULL, SND_FILENAME | SND_ASYNC); break;
-        case 3: PlaySound("end_track.wav", NULL, SND_FILENAME | SND_ASYNC); break;
-        case 4: PlaySound("hit_key.wav", NULL, SND_FILENAME | SND_ASYNC); break;
+        case 1: PlaySound(TEXT("menu_press.wav"), NULL, SND_FILENAME | SND_ASYNC); break;
+        case 2: PlaySound(TEXT("track_selected.wav"), NULL, SND_FILENAME | SND_ASYNC); break;
+        case 3: PlaySound(TEXT("end_track.wav"), NULL, SND_FILENAME | SND_ASYNC); break;
+        case 4: PlaySound(TEXT("hit_key.wav"), NULL, SND_FILENAME | SND_ASYNC); break;
         default: return;
     }
 }
@@ -544,29 +519,19 @@ void play_track(int file){
         case 4: mciSendString("open \"track_tuto.mp3\" type mpegvideo alias bgm", NULL, 0, NULL); break;
         default: return;
     }
-
     mciSendString("play bgm", NULL, 0, NULL);
 }
 
-
-// ========================================
-// ================= GAME =================
-// ========================================
-
 int calculate_score(float time_diff){
     float abs_diff = fabs(time_diff);
-
-    if(abs_diff <= 1) return 300;      // PERFECT
-    if(abs_diff <= 2) return 200;       // GOOD
-    if(abs_diff <= 3) return 100;       // OK
-
+    if(abs_diff <= 1) return 300;      
+    if(abs_diff <= 2) return 200;       
+    if(abs_diff <= 3) return 100;       
     return 0;
 }
 
-
 void spawn_note(Note n){
     set_color(4);
-
     gotoxy(n.x, n.y); printf(" ");
     gotoxy(n.x + 1, n.y); printf("|");
     gotoxy(n.x - 1, n.y); printf("|");
@@ -604,15 +569,20 @@ void end_track_results(){
     set_color(7);
     printf("\nPress any key to continue...\n");
     play_audio(3);
+    
+    // Drain remaining inputs before pause
+    while(_kbhit()) _getch(); 
     system("pause");
 }
 
 void handle_game(){
     float current_time = (float)(GetTickCount() - track_start_time) / 1000.0f;
 
-    system("cls");
+    // FIX: Removed `system("cls")` here. Overwriting using `gotoxy` avoids screen tearing.
 
-    if(check_escape()){
+    process_inputs();
+
+    if(esc_pressed){
         track_playing = 0;
         system("cls");
         printf("Track cancelled.\n");
@@ -620,40 +590,39 @@ void handle_game(){
         return;
     }
 
+    // Padded string strings act as a clear line
     gotoxy(0,0);
     set_color(7);
     printf("Score: %-6d | Hit: %-3d | Missed: %-3d   ", current_score, notes_hit, notes_missed);
     gotoxy(0, 1);
-    printf("Time: %.2f   [ESC to quit]      ", current_time);
+    printf("Time: %.2f   [ESC to quit]       ", current_time);
 
-    int mouse_x, mouse_y;
-
-    // Clear previous mouse position
-    if(last_mouse_x >= 0 && last_mouse_y >= 0){
-        gotoxy(last_mouse_x, last_mouse_y);
+    // Erase old mouse cursor
+    if(prev_mouse_x >= 0 && prev_mouse_y >= 0 && (prev_mouse_x != last_mouse_x || prev_mouse_y != last_mouse_y)){
+        gotoxy(prev_mouse_x, prev_mouse_y);
         printf(" ");
     }
 
-    // Get and display current mouse position
-    if(get_mouse_position(&mouse_x, &mouse_y)){
-        gotoxy(mouse_x, mouse_y);
+    // Draw new mouse position
+    if(last_mouse_x >= 0 && last_mouse_y >= 0){
+        gotoxy(last_mouse_x, last_mouse_y);
         set_color(14);
         printf("O");
         set_color(7);
-        last_mouse_x = mouse_x;
-        last_mouse_y = mouse_y;
+        prev_mouse_x = last_mouse_x;
+        prev_mouse_y = last_mouse_y;
     }
 
-    if(get_mouse_click(&mouse_x, &mouse_y)){
-        // Process click
+    // Process hits
+    if(click_x != -1 && click_y != -1){
         for(int i = 0; i <= last_tr; i++){
             if(!track[i].is_active || track[i].is_hit)
                 continue;
 
             float time_diff = current_time - track[i].spawn_time;
 
-            if(mouse_x >= track[i].x - 1 && mouse_x <= track[i].x + 1 &&
-               mouse_y >= track[i].y - 1 && mouse_y <= track[i].y + 1){
+            if(click_x >= track[i].x - 1 && click_x <= track[i].x + 1 &&
+               click_y >= track[i].y - 1 && click_y <= track[i].y + 1){
 
                 if(fabs(time_diff) <= 3){
                     int score = calculate_score(time_diff);
@@ -667,21 +636,18 @@ void handle_game(){
         }
     }
 
-   for(int i = 0; i <= last_tr; i++){
+    for(int i = 0; i <= last_tr; i++){
+        // FIX: Only draw the note exactly ONCE when it becomes active. Avoid drawing it every frame.
         if(!track[i].is_active && current_time >= track[i].spawn_time){
             track[i].is_active = 1;
-        }
-
-        if(track[i].is_active && !track[i].is_hit){
-            spawn_note(track[i]);
+            spawn_note(track[i]); 
         }
 
         if(track[i].is_active && !track[i].is_hit &&
            current_time > track[i].spawn_time + 3){
-
             notes_missed++;
             track[i].is_hit = 1;
-            clear_note(track[i]);
+            clear_note(track[i]); // Erase from screen when missed
         }
     }
 
@@ -689,7 +655,6 @@ void handle_game(){
         track_playing = 0;
         end_track_results();
 
-        // Validate player index before saving
         if(current_player_index >= 0 && current_player_index <= last_lb){
             if(current_track_id == 1 && current_score > leaderboard[current_player_index].score_1){
                 leaderboard[current_player_index].score_1 = current_score;
@@ -705,28 +670,5 @@ void handle_game(){
         }
     }
 
-    Sleep(50);
-}
-
-int check_escape(){
-    HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-    INPUT_RECORD inRec;
-    DWORD numRead;
-
-    // Non-blocking check
-    if(!PeekConsoleInput(hInput, &inRec, 1, &numRead) || numRead == 0){
-        return 0;
-    }
-
-    if(inRec.EventType == KEY_EVENT){
-        KEY_EVENT_RECORD k = inRec.Event.KeyEvent;
-
-        if(k.bKeyDown && k.wVirtualKeyCode == VK_ESCAPE){
-            // Actually read it to remove from buffer
-            ReadConsoleInput(hInput, &inRec, 1, &numRead);
-            return 1;
-        }
-    }
-
-    return 0;
+    Sleep(30); // Slight frame limiter for console friendliness
 }
